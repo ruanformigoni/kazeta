@@ -44,12 +44,16 @@ function stop_playtime_capture {
 
 function cleanup {
 	stop_playtime_capture
-	rm -f .local/share/gvfs-metadata
+	if [[ "${cart_overlay}" != "no" ]]; then
+		rm -f .local/share/gvfs-metadata
+	fi
 	popd
-	pkexec kazeta-mount --unmount "${target}" "${runtimedir}"
+	if [[ "${cart_overlay}" != "no" ]]; then
+		pkexec kazeta-mount --unmount "${target}" "${runtimedir}"
+		rm -rf "${upper}/.kazeta/share"
+		rmdir --ignore-fail-on-non-empty "${upper}/.kazeta"
+	fi
 	pkexec kazeta-mount kzp --unmount "${cart_path}"
-	rm -rf "${upper}/.kazeta/share"
-	rmdir --ignore-fail-on-non-empty "${upper}/.kazeta"
 }
 
 if [[ "$1" == *.kzi ]]; then
@@ -88,6 +92,7 @@ fi
 
 cart_id="$(get_attribute 'Id' ${cart_info})"
 cart_icon="${cart_path}/$(get_attribute 'Icon' ${cart_info})"
+cart_overlay="$(get_attribute 'Overlay' ${cart_info})"
 
 mkdir -p "${BASE_DIR}/cache/${cart_id}"
 cp "${cart_info}" "${BASE_DIR}/cache/${cart_id}/metadata.kzi"
@@ -95,41 +100,45 @@ if [[ -f "${cart_icon}" ]]; then
 	cp "${cart_icon}" "${BASE_DIR}/cache/${cart_id}/icon.png"
 fi
 
-lower="${cart_path}"
-upper="${BASE_DIR}/saves/default/${cart_id}"
-work="${BASE_DIR}/run/work"
-target="${BASE_DIR}/run/cart"
+if [[ "${cart_overlay}" != "no" ]]; then
+	lower="${cart_path}"
+	upper="${BASE_DIR}/saves/default/${cart_id}"
+	work="${BASE_DIR}/run/work"
+	target="${BASE_DIR}/run/cart"
 
-if [[ ! -d "${upper}" ]]; then
-	rm -f "${upper}"
-	mkdir -p "${upper}"
-fi
+	if [[ ! -d "${upper}" ]]; then
+		rm -f "${upper}"
+		mkdir -p "${upper}"
+	fi
 
-# workaround for gvfs-metadata preventing unmount
-mkdir -p "${upper}/.local/share"
-touch "${upper}/.local/share/gvfs-metadata"
+	# workaround for gvfs-metadata preventing unmount
+	mkdir -p "${upper}/.local/share"
+	touch "${upper}/.local/share/gvfs-metadata"
 
-runtime_name="$(get_attribute 'Runtime' ${cart_info})"
-if [ -n "$runtime_name" ]; then
-	runtime="${media_path}/${runtime_name}"
-	if [ ! -f "$runtime" ]; then
-		runtime="${media_path}/${runtime_name}.kzr"
+	runtime_name="$(get_attribute 'Runtime' ${cart_info})"
+	if [ -n "$runtime_name" ]; then
+		runtime="${media_path}/${runtime_name}"
 		if [ ! -f "$runtime" ]; then
-			runtime="$(ls ${media_path}/${runtime_name}-*.kzr)"
+			runtime="${media_path}/${runtime_name}.kzr"
 			if [ ! -f "$runtime" ]; then
-				runtime="/usr/share/kazeta/runtimes/none.kzr"
+				runtime="$(ls ${media_path}/${runtime_name}-*.kzr)"
+				if [ ! -f "$runtime" ]; then
+					runtime="/usr/share/kazeta/runtimes/none.kzr"
+				fi
 			fi
 		fi
+	else
+		runtime="/usr/share/kazeta/runtimes/none.kzr"
 	fi
+
+	runtimedir="${BASE_DIR}/run/runtime"
+	pkexec kazeta-mount "${lower}" "${upper}" "${work}" "${target}" "${runtime}" "${runtimedir}"
+
+	export HOME="${BASE_DIR}/run/cart"
 else
-	runtime="/usr/share/kazeta/runtimes/none.kzr"
+	export HOME="${cart_path}"
 fi
-
-runtimedir="${BASE_DIR}/run/runtime"
-pkexec kazeta-mount "${lower}" "${upper}" "${work}" "${target}" "${runtime}" "${runtimedir}"
 trap cleanup EXIT
-
-export HOME="${BASE_DIR}/run/cart"
 
 unset XDG_CONFIG_HOME
 unset XDG_CACHE_HOME
@@ -151,4 +160,8 @@ rm -f .kazeta/var/playtime_end
 mkdir -p .kazeta/var
 date --iso-8601=seconds > .kazeta/var/playtime_start
 start_playtime_capture &
-gamescope ${cart_gsopts} -- ./.kazeta/share/run /tmp/kazeta-cart-exec | grep -v "pressure-vessel-wrap" > "${HOME}/.kazeta/var/run.log" 2>&1
+if [[ "${cart_overlay}" != "no" ]]; then
+	gamescope ${cart_gsopts} -- ./.kazeta/share/run /tmp/kazeta-cart-exec
+else
+	gamescope ${cart_gsopts} -- ${cart_exec}
+fi | grep -v "pressure-vessel-wrap" > "${HOME}/.kazeta/var/run.log" 2>&1
